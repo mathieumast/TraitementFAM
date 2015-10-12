@@ -167,7 +167,6 @@ class TraitementFAM:
                     tmpFeatList = self.dedoublList(tmpFeatList)
                     # On ajoute les parcelles a la liste globale
                     featList += tmpFeatList
-                # self.rmShp("tmpShp", self.workDir)
 
     # Fonction de recuperation de la liste des sous-dossiers communaux:
     def listSubFolders(self):
@@ -247,10 +246,11 @@ class TraitementFAM:
                     # Sinon on l'ajoute a la liste des features a ajouter au shapefile merge:
                     else:
                         idapps = self.dictApp[nomAoc]
+                        segment = "1"
                         feature.setAttribute("ID_APP", idapps)
-                        feature.setAttribute("ID_UNI", idapps+'-'+feature["INSEE"])
+                        feature.setAttribute("ID_UNI", segment+'-'+idapps+'-'+feature["INSEE"])
                         feature.setAttribute("TAB", tabClean)
-                        feature.setAttribute("SEGMENT", "1")
+                        feature.setAttribute("SEGMENT", segment)
                         featList.append(feature)
                 else:
                     self.logger.error("E2;L'appellation n'est pas renseignee;%s" %(tabCleanName))
@@ -277,16 +277,6 @@ class TraitementFAM:
         filename = os.path.join(comDir,tabCleanName+'.shp')
         writer = QgsVectorFileWriter.writeAsVectorFormat(layer, filename, "latin-1",self.crs,"ESRI Shapefile")
         return filename
-
-    # Suppresion d'un shp:
-    def rmShp(self, tabCleanName, comDir):
-        self.logger.error(os.path.join(comDir,tabCleanName+'.shp'))
-        os.remove(os.path.join(comDir,tabCleanName+'.shp'))
-        os.remove(os.path.join(comDir,tabCleanName+'.dbf'))
-        os.remove(os.path.join(comDir,tabCleanName+'.cpg'))
-        os.remove(os.path.join(comDir,tabCleanName+'.prj'))
-        os.remove(os.path.join(comDir,tabCleanName+'.qpj'))
-        os.remove(os.path.join(comDir,tabCleanName+'.shx'))
 
     # Fonction de creation du dictionnaire des appellations dans le csv ListeBlanche:
     def getApp(self, csvFile):
