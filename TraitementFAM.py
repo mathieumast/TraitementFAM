@@ -114,36 +114,26 @@ class TraitementFAM:
                 verif.remove("NOM_AOC")
         return verif
 
-    # Fonction de preparation du dossier de travail communal:
-    def prepareFolder(self, folder):
-        # Recuperation des Mapinfo Tabs du dossier
-        tabList = self.listFolderTabs(folder)
-        # On creee un espace de travail par commune
-        comDir = os.path.join(self.workDir, os.path.basename(folder))
-        comDir = createdir(comDir)
-        return (comDir, tabList)
-
     # Fonction de traitement principale:
     def traitTabs(self):
         inputSubFolders = self.listSubFolders()
         featList = []
         for folder in inputSubFolders:
-            prep = self.prepareFolder(folder)
-            comDir = prep[0]
-            tabList = prep[1]
+            tabList = self.listFolderTabs(folder)
+            self.logger.info(tabList)
             for tab in tabList:
                 tabClean = clean(tab)
                 tabCleanName = os.path.basename(os.path.splitext(tab)[0])
                 # self.logger.info("I1;Debut de traitement de la table;%s" %(tabCleanName))
                 try:
-                    self.traitOneTab(tab, tabClean, tabCleanName, comDir, featList)
+                    self.traitOneTab(tab, tabClean, tabCleanName, featList)
                 except:
                     self.logger.critical("C2;Traitement impossible de la table;%s" %(tabCleanName))
                 # self.logger.info("I1;Fin de traitement de la table;%s" %(tabCleanName))
         return featList
 
     # Fonction de traitement d'un tab:
-    def traitOneTab(self, tab, tabClean, tabCleanName, comDir, featList):
+    def traitOneTab(self, tab, tabClean, tabCleanName, featList):
         # Chargement du layer:
         layer = self.load(tab, tabCleanName)
         # Verification du layer si celui-ci a pu etre charge
@@ -154,7 +144,7 @@ class TraitementFAM:
                 self.logger.critical("C4;Absence des champs %s;%s" %(res, tabCleanName))
             else:
                 # On exporte le layer vers cet espace de travail en format shapefile
-                shpSource = self.exportLayer(layer, tabCleanName, comDir)
+                shpSource = self.exportLayer(layer, "tmpShp", self.workDir)
                 # On charge ce shapefile
                 shpLayer = self.load(shpSource, tabCleanName)
                 # Verification des capablities
@@ -177,7 +167,7 @@ class TraitementFAM:
                     tmpFeatList = self.dedoublList(tmpFeatList)
                     # On ajoute les parcelles a la liste globale
                     featList += tmpFeatList
-                self.rmShp(tabCleanName, comDir)
+                # self.rmShp("tmpShp", self.workDir)
 
     # Fonction de recuperation de la liste des sous-dossiers communaux:
     def listSubFolders(self):
@@ -290,6 +280,7 @@ class TraitementFAM:
 
     # Suppresion d'un shp:
     def rmShp(self, tabCleanName, comDir):
+        self.logger.error(os.path.join(comDir,tabCleanName+'.shp'))
         os.remove(os.path.join(comDir,tabCleanName+'.shp'))
         os.remove(os.path.join(comDir,tabCleanName+'.dbf'))
         os.remove(os.path.join(comDir,tabCleanName+'.cpg'))
