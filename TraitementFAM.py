@@ -177,6 +177,7 @@ class TraitementFAM:
                     tmpFeatList = self.dedoublList(tmpFeatList)
                     # On ajoute les parcelles a la liste globale
                     featList += tmpFeatList
+                self.rmShp(tabCleanName, comDir)
 
     # Fonction de recuperation de la liste des sous-dossiers communaux:
     def listSubFolders(self):
@@ -282,9 +283,19 @@ class TraitementFAM:
         return shpLayer
 
     # Fonction d'export vers shapefile:
-    def exportLayer(self, layer, tabCleanName, dir):
-        writer = QgsVectorFileWriter.writeAsVectorFormat(layer, os.path.join(dir,tabCleanName+'.shp'),"latin-1",self.crs,"ESRI Shapefile")
-        return os.path.join(dir,tabCleanName+'.shp')
+    def exportLayer(self, layer, tabCleanName, comDir):
+        filename = os.path.join(comDir,tabCleanName+'.shp')
+        writer = QgsVectorFileWriter.writeAsVectorFormat(layer, filename, "latin-1",self.crs,"ESRI Shapefile")
+        return filename
+
+    # Suppresion d'un shp:
+    def rmShp(self, tabCleanName, comDir):
+        os.remove(os.path.join(comDir,tabCleanName+'.shp'))
+        os.remove(os.path.join(comDir,tabCleanName+'.dbf'))
+        os.remove(os.path.join(comDir,tabCleanName+'.cpg'))
+        os.remove(os.path.join(comDir,tabCleanName+'.prj'))
+        os.remove(os.path.join(comDir,tabCleanName+'.qpj'))
+        os.remove(os.path.join(comDir,tabCleanName+'.shx'))
 
     # Fonction de creation du dictionnaire des appellations dans le csv ListeBlanche:
     def getApp(self, csvFile):
