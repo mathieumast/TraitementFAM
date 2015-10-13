@@ -20,9 +20,18 @@ import sys
 # Definition de la classe de lecture d'un csv:
 class TraitementFAM:
     def __init__(self):
+
+        ####
+        # Etape 1 - Nettoyage du projet courant
+        ####
+
         # supression des couches existantes dans le projet
         for layer in QgsMapLayerRegistry.instance().mapLayers():
             QgsMapLayerRegistry.instance().removeMapLayer(layer)
+
+        ####
+        # Etape 2 - Interaction utilisateur pour la récupération des paramètres d'entrée
+        ####
 
         # demande du repertoire (boite de dialogue)
         repSource = QFileDialog.getExistingDirectory(iface.mainWindow(), "Choix du repertoire des fichiers MapInfo")
@@ -39,63 +48,155 @@ class TraitementFAM:
                 if res != QMessageBox.Ok:
                     return
 
+        ####
+        # Etape 3 - Initialisation des variables du traitement
+        ####
+
+        # repertoire des tab
         self.source = repSource
+        # repertoire parent
         self.dir =  os.path.dirname(repSource)
-
+        # date
         dateStr = time.strftime("%Y-%m-%d-%H-%M-%S")
-
         # Initialisation du timer:
         t0 = time.clock()
         # Mise en place du logger:
         self.initLogger(os.path.join(self.dir, "InfoLog-%s.csv" %(dateStr)))
         self.logger.info("TYPE;MESSAGE;FICHIER")
-        # Recuperation de la liste blanche des appellations
-        self.dictApp = self.getApp(csvFile)
         # Specification du systeme de projection
         self.crs = QgsCoordinateReferenceSystem(2154, QgsCoordinateReferenceSystem.PostgisCrsId)
         # Creation d'un dossier de travail unique
         self.workDir = createdir(os.path.join(self.dir, 'WorkDir'))
-        # Traitement des couches
+
+
+        ####
+        # Etape 4 - Recuperation de la liste blanche des appellations
+        ####
+
+        self.dictApp = self.getApp(csvFile)
+
+        ####
+        # Etape 5 - Traitement des couches
+        ####
+
         featList = self.traitTabs()
-        # On dedoublonne les parcelles validees avec ID UNI
-        featList = self.dedoublListWithIDApp(featList)
+
+
+        ####
+        # Etape 6 - Dedoublonnage des parcelles validees avec ID UNI
+        ####
+
+        featList = self.dedoublListWithIDUni(featList)
+
+        ####
+        # Etape 7 - Merge dans un shape
+        ####
+
         # On creee un shapefile unique pour y regrouper l'ensemble des features
         if len(featList) > 0:
             mergeName = os.path.join(self.dir, "Merge-%s.shp" %(dateStr))
             mergeCleanName = clean(mergeName)
             self.logger.info("I1;Merge des parcelles;%s" %(mergeCleanName))
             mergeFile = self.createMerge(mergeName)
-            mergeLayer = self.load(mergeFile, mergeCleanName)
-            mergeLayer = self.appendFeat(mergeLayer, featList, mergeCleanName)
+            mergeLayer = self.loadLayer(mergeFile, mergeCleanName)
+            mergeLayer = self.appendToMerge(mergeLayer, featList, mergeCleanName)
+
+        ####
+        # Etape 8 - Fin du traitement
+        ####
+
         # On ferme le logger
         self.closeLogger()
         QMessageBox.information(iface.mainWindow(), "I2;Traitement effectue", "Traitement effectue en %s secondes" %(time.clock()-t0))
 
-    # Fonction de fermeture du logger
-    def closeLogger(self):
-        handlers = self.logger.handlers[:]
-        for handler in handlers:
-            handler.close()
-            self.logger.removeHandler(handler)
 
-    # Fonction de parametrage du logger
-    def initLogger(self, infoLog):
-        formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s")
-        handler_info = logging.FileHandler(infoLog, mode="w", encoding="utf-8")
-        handler_info.setFormatter(formatter)
-        handler_info.setLevel(logging.DEBUG)
-        self.logger = logging.getLogger("TRAITEMENT_FAM")
-        self.logger.setLevel(logging.DEBUG)
-        self.logger.addHandler(handler_info)
+    ####
+    # Methodes du traitement
+    ###
 
-    # Fonction de chargement d'un layer:
-    def load(self, tab, tabCleanName):
+    # Fonction de creation du dictionnaire des appellations dans le csv ListeBlanche:
+    def getApp(self, csvFile):
+        dictApp = dict()
+        with open(csvFile, 'rb') as f:
+            r = CsvReader(f, delimiter=";", encoding='cp1252', quoting=csv.QUOTE_MINIMAL)
+            for row in r:
+                if len(row) >= 2:
+                    nomAOC = removeAccents(row[1])
+                    idApp = str(row[0])
+                    # On ajout de nom AOC avec son ID App
+                    dictApp[nomAOC] = idApp
+                    # On ajout de nom AOC dont les mots sont joints (suppresion des espaces) avec son ID App (permet une recherche approchante)
+                    dictApp[join(nomAOC)] = idApp
+        f.close()
+        return dictApp
+
+    # Fonction de traitement principale:
+    def traitTabs(self):
+        #Expression reguliere pour rechercher les dossiers par communes
+        regex = re.compile(r"^[0-9]{5}")
+        # Listage des sous-dossiers pour travailler au niveau des dossiers communaux
+        inputSubFolders = [os.path.join(dirpath, os.path.basename(name))
+            for dirpath, dirnames, files in os.walk(self.source)
+            for name in dirnames
+            if regex.match(name) ]
+        # Liste des features
+        featList = []
+        for folder in inputSubFolders:
+            # Listage des fichiers tab
+            tabList = [os.path.join(dirpath, f)
+                for dirpath, dirnames, files in os.walk(folder)
+                for f in fnmatch.filter(files, '*.[Tt][Aa][Bb]')]
+            for tab in tabList:
+                tabCleanName = clean(tab)
+                # self.logger.info("I1;Debut de traitement de la table;%s" %(tabCleanName))
+                try:
+                    featList += self.traitOneTab(tab, tabCleanName, featList)
+                except:
+                    self.logger.critical("C2;Traitement impossible de la table;%s" %(tabCleanName))
+                # self.logger.info("I1;Fin de traitement de la table;%s" %(tabCleanName))
+        return featList
+
+    # Fonction de traitement d'un tab:
+    def traitOneTab(self, tab, tabCleanName, featList):
+        # Liste des features
+        featList = []
+        # Chargement du layer:
+        layer = self.loadLayer(tab, tabCleanName)
+        # Verification du layer si celui-ci a pu etre charge
+        if layer != NULL:
+            res = self.checkLayer(layer)
+            # Si la verification echoue on log et on copie les fichiers dans le dossier d'erreurs
+            if res:
+                self.logger.critical("C4;Absence des champs %s;%s" %(res, tabCleanName))
+            else:
+                # On exporte le layer vers cet espace de travail en format shapefile
+                workFile = os.path.join(self.workDir,"tmpShp.shp")
+                QgsVectorFileWriter.writeAsVectorFormat(layer, workFile, "latin-1",self.crs,"ESRI Shapefile")
+                # On charge ce shapefile
+                workLayer = self.loadLayer(workFile, tabCleanName)
+                # Verification des capablities
+                caps = workLayer.dataProvider().capabilities()
+                if not caps & QgsVectorDataProvider.ChangeAttributeValues or not caps & QgsVectorDataProvider.DeleteAttributes or not caps & QgsVectorDataProvider.AddAttributes:
+                    self.logger.critical("C5;Modification impossible;%s"  %(tabCleanName))
+                else:
+                    # On supprime les champs inutiles
+                    self.deleteFields(workLayer)
+                    # On ajoute les champs necessaires
+                    self.addFields(workLayer)
+                    # On rejette les features dont l'appellation ne fait pas partie de la liste blanche
+                    tmpFeatList = self.calcField(workLayer, tabCleanName)
+                    # On dedoublonne les parcelles validees:
+                    featList += self.dedoublList(tmpFeatList)
+        return featList
+
+    # Fonction de chargement d'une couche:
+    def loadLayer(self, filename, basename):
         try:
-            layer = QgsVectorLayer(tab, tab, "ogr")
+            layer = QgsVectorLayer(filename, basename, "ogr")
             layer.setCrs(self.crs)
             return layer
         except:
-            self.logger.critical("C1;Chargement impossible;%s" %(tabCleanName))
+            self.logger.critical("C1;Chargement impossible;%s" %(basename))
             return NULL
 
     # Fonction de verification de la presence des champs INSEE, COMMUNE, NOM_AOC:
@@ -114,119 +215,32 @@ class TraitementFAM:
                 verif.remove("NOM_AOC")
         return verif
 
-    # Fonction de traitement principale:
-    def traitTabs(self):
-        inputSubFolders = self.listSubFolders()
-        featList = []
-        for folder in inputSubFolders:
-            tabList = self.listFolderTabs(folder)
-            self.logger.info(tabList)
-            for tab in tabList:
-                tabClean = clean(tab)
-                tabCleanName = os.path.basename(os.path.splitext(tab)[0])
-                # self.logger.info("I1;Debut de traitement de la table;%s" %(tabCleanName))
-                try:
-                    self.traitOneTab(tab, tabClean, tabCleanName, featList)
-                except:
-                    self.logger.critical("C2;Traitement impossible de la table;%s" %(tabCleanName))
-                # self.logger.info("I1;Fin de traitement de la table;%s" %(tabCleanName))
-        return featList
-
-    # Fonction de traitement d'un tab:
-    def traitOneTab(self, tab, tabClean, tabCleanName, featList):
-        # Chargement du layer:
-        layer = self.load(tab, tabCleanName)
-        # Verification du layer si celui-ci a pu etre charge
-        if layer != NULL:
-            res = self.checkLayer(layer)
-            # Si la verification echoue on log et on copie les fichiers dans le dossier d'erreurs
-            if res:
-                self.logger.critical("C4;Absence des champs %s;%s" %(res, tabCleanName))
+    # Fonction de suppresion des champs inutiles:
+    def deleteFields(self, shpLayer):
+        fields = shpLayer.pendingFields()
+        delIndex = []
+        for field in fields:
+            if field.name() not in ("INSEE", "COMMUNE", "NOM_AOC"):
+                fieldIndex = shpLayer.dataProvider().fieldNameIndex(field.name())
+                delIndex.append(fieldIndex)
             else:
-                # On exporte le layer vers cet espace de travail en format shapefile
-                shpSource = self.exportLayer(layer, "tmpShp", self.workDir)
-                # On charge ce shapefile
-                shpLayer = self.load(shpSource, tabCleanName)
-                # Verification des capablities
-                caps = shpLayer.dataProvider().capabilities()
-                if not caps & QgsVectorDataProvider.ChangeAttributeValues or not caps & QgsVectorDataProvider.DeleteAttributes or not caps & QgsVectorDataProvider.AddAttributes:
-                    self.logger.critical("C5;Modification impossible;%s"  %(tabCleanName))
-                else:
-                    # On supprime les champs inutiles
-                    self.deleteFields(shpLayer)
-                    # On ajoute les champs necessaires
-                    fields = []
-                    fields.append(QgsField("ID_UNI", QVariant.String, "string", 20))
-                    fields.append(QgsField("SEGMENT", QVariant.String, "string", 20))
-                    fields.append(QgsField("ID_APP", QVariant.String, "string", 20))
-                    fields.append(QgsField("TAB", QVariant.String, "string", 100))
-                    self.addField(shpLayer, fields)
-                    # On rejette les features dont l'appellation ne fait pas partie de la liste blanche
-                    tmpFeatList = self.calcField(tabClean, tabCleanName, shpLayer)
-                    # On dedoublonne les parcelles validees:
-                    tmpFeatList = self.dedoublList(tmpFeatList)
-                    # On ajoute les parcelles a la liste globale
-                    featList += tmpFeatList
+                pass
+        res = shpLayer.dataProvider().deleteAttributes(delIndex)
+        shpLayer.updateFields()
+        return shpLayer
 
-    # Fonction de recuperation de la liste des sous-dossiers communaux:
-    def listSubFolders(self):
-        #Expression reguliere pour rechercher les dossiers par communes
-        regex = re.compile(r"^[0-9]{5}")
-        # Listage des sous-dossiers pour travailler au niveau des dossiers communaux
-        inputSubFolders = [os.path.join(dirpath, os.path.basename(name))
-            for dirpath, dirnames, files in os.walk(self.source)
-            for name in dirnames
-            if regex.match(name) ]
-        return inputSubFolders
-
-    # Fonction listant les fichiers .tab contenus dans un dossier:
-    def listFolderTabs(self, folder):
-        tabList = [os.path.join(dirpath, f)
-            for dirpath, dirnames, files in os.walk(folder)
-            for f in fnmatch.filter(files, '*.[Tt][Aa][Bb]')]
-        return tabList
-
-    # Fonction de creation d'un shapefile mergee par commune:
-    def createMerge(self, outputFilename):
-        fields = QgsFields()
-        fields.append(QgsField("Id_uni", QVariant.String, "string", 20))
-        fields.append(QgsField("Segment", QVariant.String, "string", 20))
-        fields.append(QgsField("IDApp", QVariant.String, "string", 20))
-        fields.append(QgsField("INSEE", QVariant.String, "string", 9))
-        fields.append(QgsField("COMMUNE", QVariant.String, "string", 100))
-        fields.append(QgsField("APPELLATIO", QVariant.String, "string", 254))
+    # Fonction d'ajout des champs necessaires:
+    def addFields(self, layer):
+        fields = []
+        fields.append(QgsField("ID_UNI", QVariant.String, "string", 20))
+        fields.append(QgsField("SEGMENT", QVariant.String, "string", 20))
+        fields.append(QgsField("ID_APP", QVariant.String, "string", 20))
         fields.append(QgsField("TAB", QVariant.String, "string", 100))
-        writer = QgsVectorFileWriter(outputFilename, "latin-1", fields,    QGis.WKBPolygon, self.crs, "ESRI Shapefile")
-        return outputFilename
-
-    # Fonction d'ajout d'un champ:
-    def addField(self, layer, field):
-        res = layer.dataProvider().addAttributes(field)
+        layer.dataProvider().addAttributes(fields)
         layer.updateFields()
 
-    # Fonction d'ajout d'une liste de features au shapefile merge:
-    def appendFeat(self, layer, featureList, mergeCleanName):
-        caps = layer.dataProvider().capabilities()
-        if not caps & QgsVectorDataProvider.AddFeatures:
-            self.logger.critical("C5;Ajout dans le merge impossible;%s" %(mergeCleanName))
-        else:
-            layer.startEditing()
-            for f in featureList:
-                newFeat = QgsFeature(layer.pendingFields())
-                newFeat.setAttribute("Id_uni", f["ID_UNI"])
-                newFeat.setAttribute("Segment", f["SEGMENT"])
-                newFeat.setAttribute("IDApp", f["ID_APP"])
-                newFeat.setAttribute("INSEE", f["INSEE"])
-                newFeat.setAttribute("COMMUNE", f["COMMUNE"])
-                newFeat.setAttribute("APPELLATIO", f["NOM_AOC"])
-                newFeat.setAttribute("TAB", f["TAB"])
-                newFeat.setGeometry(f.geometry())
-                layer.dataProvider().addFeatures([newFeat])
-            layer.commitChanges()
-        return layer
-
-    # Fonction de comparaison de l'appellation avec la liste blanche:
-    def calcField(self, tabClean, tabCleanName, layer):
+    # Fonction de calcul des champs et comparaison de l'appellation avec la liste blanche:
+    def calcField(self, layer, tabCleanName):
         index = layer.fieldNameIndex("NOM_AOC")
         layer.startEditing()
         featList = []
@@ -249,7 +263,7 @@ class TraitementFAM:
                         segment = "1"
                         feature.setAttribute("ID_APP", idapps)
                         feature.setAttribute("ID_UNI", segment+'-'+idapps+'-'+feature["INSEE"])
-                        feature.setAttribute("TAB", tabClean)
+                        feature.setAttribute("TAB", tabCleanName)
                         feature.setAttribute("SEGMENT", segment)
                         featList.append(feature)
                 else:
@@ -257,42 +271,6 @@ class TraitementFAM:
             else:
                 self.logger.error("E3;Geometrie absente;%s" %(tabCleanName))
         return featList
-
-    # Fonction de suppresion des champs inutiles:
-    def deleteFields(self, shpLayer):
-        fields = shpLayer.pendingFields()
-        delIndex = []
-        for field in fields:
-            if field.name() not in ("INSEE", "COMMUNE", "NOM_AOC"):
-                fieldIndex = shpLayer.dataProvider().fieldNameIndex(field.name())
-                delIndex.append(fieldIndex)
-            else:
-                pass
-        res = shpLayer.dataProvider().deleteAttributes(delIndex)
-        shpLayer.updateFields()
-        return shpLayer
-
-    # Fonction d'export vers shapefile:
-    def exportLayer(self, layer, tabCleanName, comDir):
-        filename = os.path.join(comDir,tabCleanName+'.shp')
-        writer = QgsVectorFileWriter.writeAsVectorFormat(layer, filename, "latin-1",self.crs,"ESRI Shapefile")
-        return filename
-
-    # Fonction de creation du dictionnaire des appellations dans le csv ListeBlanche:
-    def getApp(self, csvFile):
-        dictApp = dict()
-        with open(csvFile, 'rb') as f:
-            r = CsvReader(f, delimiter=";", encoding='cp1252', quoting=csv.QUOTE_MINIMAL)
-            for row in r:
-                if len(row) >= 2:
-                    nomAOC = removeAccents(row[1])
-                    idApp = str(row[0])
-                    # On ajout de nom AOC avec son ID App
-                    dictApp[nomAOC] = idApp
-                    # On ajout de nom AOC dont les mots sont joints (suppresion des espaces) avec son ID App (permet une recherche approchante)
-                    dictApp[join(nomAOC)] = idApp
-        f.close()
-        return dictApp
 
     # Fonction permettant de dedoublonner les features d'un shapefile merge par commune sur la base de la geometrie (coordonnees du centroide et aire):
     def dedoublList(self, featureList):
@@ -314,7 +292,7 @@ class TraitementFAM:
         return ddblFeatList
 
     # Fonction permettant de dedoublonner les features d'un shapefile merge par commune sur la base de la geometrie (coordonnees du centroide et aire) et de l'ID App:
-    def dedoublListWithIDApp(self, featureList):
+    def dedoublListWithIDUni(self, featureList):
         # On initialise une liste de cles uniques et une liste des features dedoublonnes:
         uniqueGeomList = []
         ddblFeatList = []
@@ -332,6 +310,61 @@ class TraitementFAM:
                 uniqueGeomList.append(v)
                 ddblFeatList.append(f)
         return ddblFeatList
+
+    # Fonction de creation d'un shapefile mergee par commune:
+    def createMerge(self, outputFilename):
+        fields = QgsFields()
+        fields.append(QgsField("Id_uni", QVariant.String, "string", 20))
+        fields.append(QgsField("Segment", QVariant.String, "string", 20))
+        fields.append(QgsField("IDApp", QVariant.String, "string", 20))
+        fields.append(QgsField("INSEE", QVariant.String, "string", 9))
+        fields.append(QgsField("COMMUNE", QVariant.String, "string", 100))
+        fields.append(QgsField("APPELLATIO", QVariant.String, "string", 254))
+        fields.append(QgsField("TAB", QVariant.String, "string", 100))
+        writer = QgsVectorFileWriter(outputFilename, "latin-1", fields, QGis.WKBPolygon, self.crs, "ESRI Shapefile")
+        return outputFilename
+
+    # Fonction d'ajout d'une liste de features à la couche de merge:
+    def appendToMerge(self, layer, featureList, mergeCleanName):
+        caps = layer.dataProvider().capabilities()
+        if not caps & QgsVectorDataProvider.AddFeatures:
+            self.logger.critical("C5;Ajout dans le merge impossible;%s" %(mergeCleanName))
+        else:
+            layer.startEditing()
+            for f in featureList:
+                newFeat = QgsFeature(layer.pendingFields())
+                newFeat.setAttribute("Id_uni", f["ID_UNI"])
+                newFeat.setAttribute("Segment", f["SEGMENT"])
+                newFeat.setAttribute("IDApp", f["ID_APP"])
+                newFeat.setAttribute("INSEE", f["INSEE"])
+                newFeat.setAttribute("COMMUNE", f["COMMUNE"])
+                newFeat.setAttribute("APPELLATIO", f["NOM_AOC"])
+                newFeat.setAttribute("TAB", f["TAB"])
+                newFeat.setGeometry(f.geometry())
+                layer.dataProvider().addFeatures([newFeat])
+            layer.commitChanges()
+        return layer
+
+    # Fonction de parametrage du logger
+    def initLogger(self, infoLog):
+        formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s")
+        handler_info = logging.FileHandler(infoLog, mode="w", encoding="utf-8")
+        handler_info.setFormatter(formatter)
+        handler_info.setLevel(logging.DEBUG)
+        self.logger = logging.getLogger("TRAITEMENT_FAM")
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.addHandler(handler_info)
+
+    # Fonction de fermeture du logger
+    def closeLogger(self):
+        handlers = self.logger.handlers[:]
+        for handler in handlers:
+            handler.close()
+            self.logger.removeHandler(handler)
+
+####
+# Fonctions utilitaires
+###
 
 # Fonction de creation d'un dossier si celui-ci n'existe pas deja:
 def createdir(x):
