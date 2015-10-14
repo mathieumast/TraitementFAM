@@ -17,21 +17,23 @@ import time
 import logging
 import sys
 
-# Definition de la classe de lecture d'un csv:
+
+# Definition de la classe de traitement:
 class TraitementFAM:
     def __init__(self):
 
-        ####
+        #
         # Etape 1 - Nettoyage du projet courant
-        ####
+        #
 
         # supression des couches existantes dans le projet
         for layer in QgsMapLayerRegistry.instance().mapLayers():
             QgsMapLayerRegistry.instance().removeMapLayer(layer)
 
-        ####
+
+        #
         # Etape 2 - Interaction utilisateur pour la recuperation des parametres d'entree
-        ####
+        #
 
         # demande du repertoire (boite de dialogue)
         repSource = QFileDialog.getExistingDirectory(iface.mainWindow(), "Choix du repertoire des fichiers MapInfo")
@@ -48,9 +50,10 @@ class TraitementFAM:
                 if res != QMessageBox.Ok:
                     return
 
-        ####
+
+        #
         # Etape 3 - Initialisation des variables du traitement
-        ####
+        #
 
         # repertoire des tab
         self.source = repSource
@@ -69,28 +72,31 @@ class TraitementFAM:
         self.workDir = createdir(os.path.join(self.dir, 'WorkDir'))
 
 
-        ####
+        #
         # Etape 4 - Recuperation de la liste blanche des appellations
-        ####
+        #
+
 
         self.dictApp = self.getApp(csvFile)
 
-        ####
+
+        #
         # Etape 5 - Traitement des couches
-        ####
+        #
 
         featList = self.traitTabs()
 
 
-        ####
+        #
         # Etape 6 - Dedoublonnage des parcelles validees avec ID UNI
-        ####
+        #
 
         featList = self.dedoublListWithIDUni(featList)
 
-        ####
+
+        #
         # Etape 7 - Merge dans un shape
-        ####
+        #
 
         # On creee un shapefile unique pour y regrouper l'ensemble des features
         if len(featList) > 0:
@@ -101,18 +107,19 @@ class TraitementFAM:
             mergeLayer = self.loadLayer(mergeFile, mergeCleanName)
             mergeLayer = self.appendToMerge(mergeLayer, featList, mergeCleanName)
 
-        ####
+
+        #
         # Etape 8 - Fin du traitement
-        ####
+        #
 
         # On ferme le logger
         self.closeLogger()
         QMessageBox.information(iface.mainWindow(), "I2;Traitement effectue", "Traitement effectue en %s secondes" %(time.clock()-t0))
 
 
-    ####
+    #
     # Methodes du traitement
-    ###
+    #
 
     # Fonction de creation du dictionnaire des appellations dans le csv ListeBlanche:
     def getApp(self, csvFile):
@@ -132,7 +139,7 @@ class TraitementFAM:
 
     # Fonction de traitement principale:
     def traitTabs(self):
-        #Expression reguliere pour rechercher les dossiers par communes
+        # Expression reguliere pour rechercher les dossiers par communes
         regex = re.compile(r"^[0-9]{5}")
         # Listage des sous-dossiers pour travailler au niveau des dossiers communaux
         inputSubFolders = [os.path.join(dirpath, os.path.basename(name))
@@ -362,9 +369,10 @@ class TraitementFAM:
             handler.close()
             self.logger.removeHandler(handler)
 
-####
+
+#
 # Fonctions utilitaires
-###
+#
 
 # Fonction de creation d'un dossier si celui-ci n'existe pas deja:
 def createdir(x):
