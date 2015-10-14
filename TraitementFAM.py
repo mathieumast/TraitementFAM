@@ -30,7 +30,7 @@ class TraitementFAM:
             QgsMapLayerRegistry.instance().removeMapLayer(layer)
 
         ####
-        # Etape 2 - Interaction utilisateur pour la récupération des paramètres d'entrée
+        # Etape 2 - Interaction utilisateur pour la recuperation des parametres d'entree
         ####
 
         # demande du repertoire (boite de dialogue)
@@ -324,7 +324,7 @@ class TraitementFAM:
         writer = QgsVectorFileWriter(outputFilename, "latin-1", fields, QGis.WKBPolygon, self.crs, "ESRI Shapefile")
         return outputFilename
 
-    # Fonction d'ajout d'une liste de features à la couche de merge:
+    # Fonction d'ajout d'une liste de features a la couche de merge:
     def appendToMerge(self, layer, featureList, mergeCleanName):
         caps = layer.dataProvider().capabilities()
         if not caps & QgsVectorDataProvider.AddFeatures:
