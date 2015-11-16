@@ -335,7 +335,7 @@ class TraitementFAM:
     def appendToMerge(self, layer, featureList, mergeCleanName):
         caps = layer.dataProvider().capabilities()
         if not caps & QgsVectorDataProvider.AddFeatures:
-            self.logger.critical("C5;Ajout dans le merge impossible;%s" %(mergeCleanName))
+            self.logger.critical("C3;Ajout dans le merge impossible;%s" %(mergeCleanName))
         else:
             layer.startEditing()
             for f in featureList:
